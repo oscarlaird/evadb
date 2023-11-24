@@ -231,6 +231,48 @@ class CreateFunctionExecutor(AbstractExecutor):
             train_time,
         )
 
+    def handle_modal_function(self):
+        """Handle modal functions
+        
+        Create a dummy predictor which returns
+        the mode of the target column in the training data.
+        """
+        # try_to_import_biglib()
+
+        # assemble all the training data into an in-memory dataframe
+        aggregated_batch_list = []
+        child = self.children[0]
+        for batch in child.exec():
+            aggregated_batch_list.append(batch)
+        aggregated_batch = Batch.concat(aggregated_batch_list, copy=False)
+        aggregated_batch.drop_column_alias()
+
+        # predictor parameters (e.g. base_model, epochs)
+        arg_map = {arg.key: arg.value for arg in self.node.metadata}
+
+        # get the target column name
+        target_col = arg_map["predict"]
+        col_mode = aggregated_batch.frames[target_col].mode()[0]
+
+        # save these to the function metadata
+        self.node.metadata.append(
+            FunctionMetadataCatalogEntry("target_col", target_col)
+        )
+        self.node.metadata.append(FunctionMetadataCatalogEntry("col_mode", str(col_mode)))
+
+
+        impl_path = Path(f"{self.function_dir}/modal.py").absolute().as_posix()
+        io_list = self._resolve_function_io(None)
+        return (
+            self.node.name,
+            impl_path,
+            self.node.function_type,
+            io_list,
+            self.node.metadata,
+        )
+
+
+
     def convert_to_numeric(self, x):
         x = re.sub("[^0-9.,]", "", str(x))
         locale.setlocale(locale.LC_ALL, "")
@@ -783,6 +825,14 @@ class CreateFunctionExecutor(AbstractExecutor):
                 best_score,
                 train_time,
             ) = self.handle_sklearn_function()
+        elif string_comparison_case_insensitive(self.node.function_type, "Modal"):
+            (
+                name,
+                impl_path,
+                function_type,
+                io_list,
+                metadata,
+            ) = self.handle_modal_function()
         elif string_comparison_case_insensitive(self.node.function_type, "XGBoost"):
             (
                 name,
